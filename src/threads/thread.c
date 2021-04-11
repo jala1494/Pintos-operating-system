@@ -25,9 +25,10 @@
 static struct list ready_list;
 
 /* List of all processes.  Processes are added to this list
-   when they are first scheduled and removed when they exit. */
+  when they are first scheduled and removed when they exit. */
 static struct list all_list;
-
+static struct list sleep_list;
+static int64_t next_tick_to_awake;
 /* Idle thread. */
 static struct thread *idle_thread;
 
@@ -84,6 +85,12 @@ static tid_t allocate_tid (void);
 
    It is not safe to call thread_current() until this function
    finishes. */
+void update_next_tick_to_awake(int64_t ticks){
+	next_tick_to_awake=(next_tick_to_awake>ticks)?ticks:next_tick_to_awake;
+}
+int64_t get_next_tick_to_awake(void){
+	return next_tick_to_awake;
+}
 void
 thread_init (void) 
 {
@@ -92,7 +99,7 @@ thread_init (void)
   lock_init (&tid_lock);
   list_init (&ready_list);
   list_init (&all_list);
-
+  list_init (&sleep_list);
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
   init_thread (initial_thread, "main", PRI_DEFAULT);
@@ -250,7 +257,32 @@ thread_unblock (struct thread *t)
   intr_set_level (old_level);
 }
 
-/* Returns the name of the running thread. */
+void thread_sleep(int64_t ticks){
+	struct thread *cur;
+	enum intr_level old_level;
+	old_level = intr_disable();
+	cur = thread_current();
+	ASSERT(cur!=idle_thread);
+	update_next_tick_to_awake(cur-> wakeup_tick = ticks);
+	list_push_back(&sleep_list, &cur->elem);
+	thread_block();
+	intr_set_level(old_level);
+}
+void thread_awake(int64_t wakeup_tick){
+	next_tick_to_awake = INT64_MAX;
+	struct list_elem *e;
+	e = list_begin(&sleep_list);
+	while(e != list_end(&sleep_list)){
+		struct thread * t = list_entry(e, struct thread, elem);
+		if(wakeup_tick >= t->wakeup_tick){
+			e = list_remove(&t->elem);
+			thread_unblock(t);
+		}else{
+			e = list_next(e);
+			update_next_tick_to_awake(t->wakeup_tick);
+		}
+	}
+}
 const char *
 thread_name (void) 
 {
